@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Giám sát & Điều khiển Vườn Cây Công Nghiệp (Cà phê, Hồ tiêu)</title>
+    <!-- Thư viện Chart.js để vẽ biểu đồ trực tuyến -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Thư viện MQTT over WebSockets -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            margin: 0;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 5px;
+        }
+        p.subtitle {
+            color: #7f8c8d;
+            margin-top: 0;
+            margin-bottom: 30px;
+        }
+        .dashboard-container {
+            display: flex;
+            justify-content: center;
+            gap: 25px;
+            flex-wrap: wrap;
+            margin-bottom: 25px;
+        }
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            width: 240px;
+        }
+        .card h3 {
+            margin-top: 0;
+            color: #34495e;
+        }
+        /* Các thẻ html class chứa dữ liệu theo yêu cầu đề bài */
+        .class-temp {
+            font-size: 32px;
+            font-weight: bold;
+            color: #e74c3c;
+        }
+        .class-hum {
+            font-size: 32px;
+            font-weight: bold;
+            color: #3498db;
+        }
+        .control-panel {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            max-width: 550px;
+            margin: 0 auto 30px auto;
+        }
+        .btn {
+            padding: 10px 20px;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            border: none;
+            border-radius: 6px;
+            color: white;
+            margin: 8px;
+            transition: 0.2s;
+        }
+        .btn:active {
+            transform: scale(0.96);
+        }
+        .btn-on { background-color: #27ae60; }
+        .btn-off { background-color: #c0392b; }
+        .chart-container {
+            width: 85%;
+            max-width: 850px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        }
+        .status-bar {
+            margin-top: 15px;
+            font-style: italic;
+            color: #e67e22;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Hệ thống Giám sát Vườn Cây Công Nghiệp</h1>
+    <p class="subtitle">Ứng dụng IoT giám sát Nhiệt độ & Độ ẩm (Cà phê, Hồ tiêu)</p>
+
+    <!-- Thẻ hiển thị dữ liệu dạng số theo yêu cầu -->
+    <div class="dashboard-container">
+        <div class="card">
+            <h3>Nhiệt độ</h3>
+            <div class="class-temp"><span id="tempValue">--</span> °C</div>
+        </div>
+        <div class="card">
+            <h3>Độ ẩm không khí</h3>
+            <div class="class-hum"><span id="humValue">--</span> %</div>
+        </div>
+    </div>
+
+    <!-- Bảng điều khiển cơ cấu chấp hành (Manual Mode) -->
+    <div class="control-panel">
+        <h3>Điều khiển Thủ công (Manual)</h3>
+        <div>
+            <strong>Máy bơm: </strong>
+            <button class="btn btn-on" onclick="controlDevice('pump', 'ON')">Bật</button>
+            <button class="btn btn-off" onclick="controlDevice('pump', 'OFF')">Tắt</button>
+        </div>
+        <div>
+            <strong>Quạt gió: </strong>
+            <button class="btn btn-on" onclick="controlDevice('fan', 'ON')">Bật</button>
+            <button class="btn btn-off" onclick="controlDevice('fan', 'OFF')">Tắt</button>
+        </div>
+        <div id="connectionStatus" class="status-bar">Đang kết nối tới MQTT Broker...</div>
+    </div>
+
+    <!-- Biểu đồ cập nhật trực tiếp theo thời gian thực -->
+    <div class="chart-container">
+        <canvas id="realtimeChart"></canvas>
+    </div>
+
+    <script>
+        // Kết nối MQTT Broker qua cổng WebSocket (HiveMQ công khai)
+        const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';
+        const client = mqtt.connect(brokerUrl);
+
+        const statusElement = document.getElementById('connectionStatus');
+
+        client.on('connect', function () {
+            statusElement.innerText = "Đã kết nối thành công tới MQTT Broker!";
+            statusElement.style.color = "#27ae60";
+            client.subscribe('garden/sensor/data');
+        });
+
+        client.on('error', function (error) {
+            statusElement.innerText = "Lỗi kết nối MQTT: " + error;
+            statusElement.style.color = "#c0392b";
+        });
+
+        // Cấu hình Biểu đồ Chart.js
+        const ctx = document.getElementById('realtimeChart').getContext('2d');
+        const realtimeChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'Nhiệt độ (°C)',
+                        borderColor: '#e74c3c',
+                        backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                        data: [],
+                        borderWidth: 2,
+                        tension: 0.3
+                    },
+                    {
+                        label: 'Độ ẩm (%)',
+                        borderColor: '#3498db',
+                        backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                        data: [],
+                        borderWidth: 2,
+                        tension: 0.3
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100
+                    }
+                }
+            }
+        });
+
+        // Lắng nghe dữ liệu từ ESP32 gửi lên qua MQTT
+        client.on('message', function (topic, payload) {
+            if (topic === 'garden/sensor/data') {
+                const data = JSON.parse(payload.toString());
+                
+                // Cập nhật giá trị lên các thẻ class HTML
+                document.getElementById('tempValue').innerText = data.temperature.toFixed(1);
+                document.getElementById('humValue').innerText = data.humidity.toFixed(1);
+
+                // Cập nhật biểu đồ thời gian thực
+                const currentTime = new Date().toLocaleTimeString();
+                
+                // Giới hạn hiển thị tối đa 15 mốc thời gian gần nhất cho gọn biểu đồ
+                if (realtimeChart.data.labels.length > 15) {
+                    realtimeChart.data.labels.shift();
+                    realtimeChart.data.datasets[0].data.shift();
+                    realtimeChart.data.datasets[1].data.shift();
+                }
+
+                realtimeChart.data.labels.push(currentTime);
+                realtimeChart.data.datasets[0].data.push(data.temperature);
+                realtimeChart.data.datasets[1].data.push(data.humidity);
+                realtimeChart.update();
+            }
+        });
+
+        // Hàm gửi lệnh điều khiển thiết bị xuống ESP32
+        function controlDevice(device, state) {
+            let topic = (device === 'pump') ? 'garden/pump/control' : 'garden/fan/control';
+            client.publish(topic, state, function (err) {
+                if (!err) {
+                    console.log(`Đã gửi lệnh ${state} cho thiết bị ${device}`);
+                }
+            });
+        }
+    </script>
+</body>
+</html>
